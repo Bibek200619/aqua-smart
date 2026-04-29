@@ -29,6 +29,7 @@ const TABLE_URL = `${BASE_URL}/rest/v1/tank?id=eq.1`;
 const EMPTY_DISTANCE_CM = 12;
 const FULL_DISTANCE_CM = 5;
 const POLL_INTERVAL_MS = 2500;
+const OFFLINE_TIMEOUT_MS = 9000;
 
 const TEAM_MEMBERS = [
   'Bibek Kumar Shah',
@@ -109,6 +110,19 @@ function normalizeTankRow(row) {
   };
 }
 
+function tankSignature(tank) {
+  if (!tank) return '';
+
+  return JSON.stringify({
+    distance: tank.distance,
+    status: tank.status,
+    pump: normalizePump(tank.pump) ? 'ON' : 'OFF',
+    buzzer: tank.buzzer,
+    mode: tank.mode,
+    updated_at: tank.updated_at,
+  });
+}
+
 function formatTime(value) {
   if (!value) return 'No data available';
 
@@ -179,7 +193,15 @@ async function patchPumpState(nextPumpState) {
   return Array.isArray(rows) ? rows[0] : rows;
 }
 
-function Header({ isPanelOpen, notifications, onTogglePanel, onClosePanel, onMarkAllRead, onMarkRead }) {
+function Header({
+  isDeviceOnline,
+  isPanelOpen,
+  notifications,
+  onTogglePanel,
+  onClosePanel,
+  onMarkAllRead,
+  onMarkRead,
+}) {
   const unreadCount = notifications.filter((item) => !item.read).length;
 
   return (
@@ -201,9 +223,9 @@ function Header({ isPanelOpen, notifications, onTogglePanel, onClosePanel, onMar
       </nav>
 
       <div className="header-actions">
-        <span className="live-chip">
+        <span className={`live-chip ${isDeviceOnline ? 'online' : 'offline'}`}>
           <Radio size={15} />
-          Live API
+          {isDeviceOnline ? 'Online' : 'Offline'}
         </span>
         <button className="icon-button bell-button" type="button" onClick={onTogglePanel} aria-label="Open notifications">
           <Bell size={21} />
@@ -268,7 +290,7 @@ function NotificationPanel({ isOpen, notifications, unreadCount, onClose, onMark
   );
 }
 
-function AlertBanner({ status, pumpOn, hasData }) {
+function AlertBanner({ status, pumpOn, hasData, isDeviceOnline, lastLiveDataAt }) {
   if (!hasData) {
     return (
       <section className="alert-banner muted" aria-live="polite">
@@ -278,6 +300,20 @@ function AlertBanner({ status, pumpOn, hasData }) {
         <div>
           <strong>No data available</strong>
           <p>The dashboard is waiting for the tank row from Supabase.</p>
+        </div>
+      </section>
+    );
+  }
+
+  if (!isDeviceOnline) {
+    return (
+      <section className="alert-banner offline" aria-live="polite">
+        <span>
+          <ShieldAlert size={20} />
+        </span>
+        <div>
+          <strong>Device Offline</strong>
+          <p>Device is offline. Showing last known data from {formatTime(lastLiveDataAt)}.</p>
         </div>
       </section>
     );
@@ -314,16 +350,19 @@ function AlertBanner({ status, pumpOn, hasData }) {
   );
 }
 
-function TankVisual({ waterPercent, status, distance, hasData }) {
+function TankVisual({ waterPercent, status, distance, hasData, isDeviceOnline }) {
   const displayPercent = hasData && waterPercent !== null ? `${waterPercent}%` : '--';
   const waterHeight = hasData && waterPercent !== null ? waterPercent : 0;
 
   return (
-    <section className={`tank-stage ${status.toLowerCase()}`} aria-label="Animated live tank level">
+    <section
+      className={`tank-stage ${status.toLowerCase()} ${hasData && !isDeviceOnline ? 'device-offline' : ''}`}
+      aria-label="Animated live tank level"
+    >
       <div className="tank-status-row">
         <span>
           <Waves size={18} />
-          Live Tank Level
+          {hasData && !isDeviceOnline ? 'Last Known Tank Level' : 'Live Tank Level'}
         </span>
         <strong>{hasData ? status : 'NO DATA'}</strong>
       </div>
@@ -369,10 +408,11 @@ function MetricCard({ icon, label, value, detail, tone = 'normal' }) {
   );
 }
 
-function StatusCards({ tank, waterPercent, status, connected }) {
+function StatusCards({ tank, waterPercent, status, apiConnected, isDeviceOnline, lastSuccessfulFetchAt }) {
   const hasData = Boolean(tank);
   const pumpOn = hasData ? normalizePump(tank.pump) : false;
   const statusTone = getStatusTone(status);
+  const syncText = isDeviceOnline ? 'Online data stream' : 'Last known value';
 
   return (
     <section className="metrics-grid" aria-label="Live tank status cards">
@@ -380,46 +420,53 @@ function StatusCards({ tank, waterPercent, status, connected }) {
         icon={<Droplets size={22} />}
         label="Water Level"
         value={hasData && waterPercent !== null ? `${waterPercent}%` : 'No data'}
-        detail={hasData && tank.distance !== null ? `${tank.distance.toFixed(1)} cm from sensor` : 'No data available'}
+        detail={hasData && tank.distance !== null ? `${tank.distance.toFixed(1)} cm from sensor - ${syncText}` : 'No data available'}
         tone={statusTone}
       />
       <MetricCard
         icon={<Gauge size={22} />}
         label="Tank Status"
         value={hasData ? status : 'No data'}
-        detail={connected ? 'Synced from Supabase' : 'Waiting for API response'}
+        detail={apiConnected ? `${isDeviceOnline ? 'Online' : 'Offline'} - API reachable` : 'Waiting for API response'}
         tone={statusTone}
       />
       <MetricCard
         icon={<Zap size={22} />}
         label="Pump Status"
         value={hasData ? (pumpOn ? 'ON' : 'OFF') : 'No data'}
-        detail={hasData ? 'Controlled through Supabase PATCH' : 'No data available'}
+        detail={hasData ? (isDeviceOnline ? 'Controls enabled' : 'Controls disabled while offline') : 'No data available'}
         tone={hasData ? (pumpOn ? 'success' : 'muted') : 'muted'}
       />
       <MetricCard
         icon={<Clock3 size={22} />}
         label="Last Updated"
         value={formatTime(tank?.updated_at)}
-        detail={hasData ? `Mode: ${tank.mode}` : 'No data available'}
+        detail={hasData ? `Mode: ${tank.mode} - Last API fetch: ${formatTime(lastSuccessfulFetchAt)}` : 'No data available'}
         tone="info"
       />
     </section>
   );
 }
 
-function PumpControls({ hasData, pumpOn, loadingState, onPumpChange }) {
+function PumpControls({ hasData, isDeviceOnline, pumpOn, loadingState, onPumpChange }) {
+  const disabled = !hasData || !isDeviceOnline || Boolean(loadingState);
+
   return (
-    <section className="control-panel" aria-label="Pump control panel">
+    <section className={`control-panel ${hasData && !isDeviceOnline ? 'offline' : ''}`} aria-label="Pump control panel">
       <div>
         <span>Remote Pump Control</span>
-        <strong>{hasData ? `Pump is ${pumpOn ? 'ON' : 'OFF'}` : 'No data available'}</strong>
+        <strong>
+          {hasData
+            ? `${isDeviceOnline ? 'Pump is' : 'Last known pump'} ${pumpOn ? 'ON' : 'OFF'}`
+            : 'No data available'}
+        </strong>
+        {hasData && !isDeviceOnline && <p>Device is offline. Pump controls are disabled.</p>}
       </div>
       <div className="control-actions">
         <button
           className="control-button on"
           type="button"
-          disabled={!hasData || Boolean(loadingState)}
+          disabled={disabled}
           onClick={() => onPumpChange('ON')}
         >
           <Power size={18} />
@@ -428,7 +475,7 @@ function PumpControls({ hasData, pumpOn, loadingState, onPumpChange }) {
         <button
           className="control-button off"
           type="button"
-          disabled={!hasData || Boolean(loadingState)}
+          disabled={disabled}
           onClick={() => onPumpChange('OFF')}
         >
           <Power size={18} />
@@ -443,7 +490,10 @@ function DashboardHero({
   tank,
   tankStatus,
   waterPercent,
-  connected,
+  apiConnected,
+  isDeviceOnline,
+  lastLiveDataAt,
+  lastSuccessfulFetchAt,
   isRefreshing,
   controlLoading,
   onRefresh,
@@ -457,9 +507,12 @@ function DashboardHero({
     <main id="dashboard" className="dashboard-shell">
       <section className="hero-panel">
         <div className="hero-copy">
-          <span className={`connection-pill ${connected ? 'online' : 'offline'}`}>
+          <span className={`connection-pill ${isDeviceOnline ? 'online' : 'offline'}`}>
             <span />
-            {connected ? 'Supabase connected' : 'Waiting for Supabase'}
+            {isDeviceOnline ? 'Device Online' : 'Device Offline'}
+          </span>
+          <span className={`api-pill ${apiConnected ? 'online' : 'offline'}`}>
+            {apiConnected ? 'Supabase API reachable' : 'Supabase API unavailable'}
           </span>
           <h1>Smart Water Tank Control Center</h1>
           <p>
@@ -478,12 +531,37 @@ function DashboardHero({
           {lastError && <p className="error-note">{lastError}</p>}
         </div>
 
-        <TankVisual waterPercent={waterPercent} status={tankStatus} distance={tank?.distance ?? null} hasData={hasData} />
+        <TankVisual
+          waterPercent={waterPercent}
+          status={tankStatus}
+          distance={tank?.distance ?? null}
+          hasData={hasData}
+          isDeviceOnline={isDeviceOnline}
+        />
       </section>
 
-      <AlertBanner status={tankStatus} pumpOn={pumpOn} hasData={hasData} />
-      <PumpControls hasData={hasData} pumpOn={pumpOn} loadingState={controlLoading} onPumpChange={onPumpChange} />
-      <StatusCards waterPercent={waterPercent} status={tankStatus} tank={tank} connected={connected} />
+      <AlertBanner
+        status={tankStatus}
+        pumpOn={pumpOn}
+        hasData={hasData}
+        isDeviceOnline={isDeviceOnline}
+        lastLiveDataAt={lastLiveDataAt}
+      />
+      <PumpControls
+        hasData={hasData}
+        isDeviceOnline={isDeviceOnline}
+        pumpOn={pumpOn}
+        loadingState={controlLoading}
+        onPumpChange={onPumpChange}
+      />
+      <StatusCards
+        waterPercent={waterPercent}
+        status={tankStatus}
+        tank={tank}
+        apiConnected={apiConnected}
+        isDeviceOnline={isDeviceOnline}
+        lastSuccessfulFetchAt={lastSuccessfulFetchAt}
+      />
     </main>
   );
 }
@@ -575,16 +653,21 @@ function TeamSection() {
 
 function App() {
   const [tank, setTank] = useState(null);
-  const [connected, setConnected] = useState(false);
+  const [apiConnected, setApiConnected] = useState(false);
+  const [isDeviceOnline, setIsDeviceOnline] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [controlLoading, setControlLoading] = useState(null);
   const [lastError, setLastError] = useState('');
+  const [lastSuccessfulFetchAt, setLastSuccessfulFetchAt] = useState(null);
+  const [lastLiveDataAt, setLastLiveDataAt] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
 
   const previousPumpRef = useRef(null);
   const previousStatusRef = useRef(null);
-  const latestAlertKeyRef = useRef('');
+  const lastSignatureRef = useRef('');
+  const lastDeviceTimestampRef = useRef(0);
+  const hasInitializedEventsRef = useRef(false);
 
   const waterPercent = useMemo(() => waterPercentFromDistance(tank?.distance), [tank?.distance]);
   const tankStatus = useMemo(() => resolveTankStatus(tank, waterPercent), [tank, waterPercent]);
@@ -614,10 +697,20 @@ function App() {
   }, []);
 
   const handleLiveEvents = useCallback(
-    (nextTank, nextStatus) => {
+    (nextTank, nextStatus, online) => {
+      // Offline or initial data should never create alerts. Alerts are only for live state transitions.
+      if (!online) return;
+
       const nextPump = normalizePump(nextTank.pump);
       const previousPump = previousPumpRef.current;
       const previousStatus = previousStatusRef.current;
+
+      if (!hasInitializedEventsRef.current || previousStatus === null || previousPump === null) {
+        hasInitializedEventsRef.current = true;
+        previousPumpRef.current = nextPump;
+        previousStatusRef.current = nextStatus;
+        return;
+      }
 
       if (previousStatus !== nextStatus) {
         if (nextStatus === 'LOW') {
@@ -625,7 +718,7 @@ function App() {
             'Low water alert',
             'Tank level moved into the LOW range.',
             'warning',
-            `status-${nextStatus}-${nextTank.updated_at || ''}`,
+            `status-${previousStatus}-${nextStatus}-${nextTank.updated_at || Date.now()}`,
           );
         }
 
@@ -634,7 +727,16 @@ function App() {
             'Overflow alert',
             'Tank level reached the overflow threshold.',
             'danger',
-            `status-${nextStatus}-${nextTank.updated_at || ''}`,
+            `status-${previousStatus}-${nextStatus}-${nextTank.updated_at || Date.now()}`,
+          );
+        }
+
+        if (nextStatus === 'NORMAL') {
+          addNotification(
+            'Tank back to normal',
+            'Tank level returned to the normal operating range.',
+            'success',
+            `status-${previousStatus}-${nextStatus}-${nextTank.updated_at || Date.now()}`,
           );
         }
       }
@@ -644,11 +746,10 @@ function App() {
           nextPump ? 'Pump turned ON' : 'Pump turned OFF',
           nextPump ? 'Relay command is now ON in Supabase.' : 'Relay command is now OFF in Supabase.',
           nextPump ? 'success' : 'info',
-          `pump-${nextPump ? 'ON' : 'OFF'}-${nextTank.updated_at || Date.now()}`,
+          `pump-${previousPump ? 'ON' : 'OFF'}-${nextPump ? 'ON' : 'OFF'}-${nextTank.updated_at || Date.now()}`,
         );
       }
 
-      latestAlertKeyRef.current = `${nextStatus}-${nextPump}`;
       previousPumpRef.current = nextPump;
       previousStatusRef.current = nextStatus;
     },
@@ -656,22 +757,39 @@ function App() {
   );
 
   const applyTankRow = useCallback(
-    (row) => {
+    (row, { force = false } = {}) => {
       const nextTank = normalizeTankRow(row);
 
       if (!nextTank) {
-        setTank(null);
-        previousStatusRef.current = null;
-        previousPumpRef.current = null;
-        latestAlertKeyRef.current = '';
-        return null;
+        if (!lastSignatureRef.current) {
+          setTank(null);
+        }
+        return { changed: false, tank: null, status: 'NO_DATA' };
+      }
+
+      const nextDeviceTime = Date.parse(nextTank.updated_at || '');
+      if (Number.isFinite(nextDeviceTime) && lastDeviceTimestampRef.current && nextDeviceTime < lastDeviceTimestampRef.current) {
+        return { changed: false, tank: nextTank, status: resolveTankStatus(nextTank, waterPercentFromDistance(nextTank.distance)) };
+      }
+
+      const nextSignature = tankSignature(nextTank);
+      if (!force && nextSignature === lastSignatureRef.current) {
+        return { changed: false, tank: nextTank, status: resolveTankStatus(nextTank, waterPercentFromDistance(nextTank.distance)) };
       }
 
       const nextPercent = waterPercentFromDistance(nextTank.distance);
       const nextStatus = resolveTankStatus(nextTank, nextPercent);
+
+      // A changed row is treated as fresh device telemetry. Repeated identical rows are ignored.
+      lastSignatureRef.current = nextSignature;
+      if (Number.isFinite(nextDeviceTime)) {
+        lastDeviceTimestampRef.current = Math.max(lastDeviceTimestampRef.current, nextDeviceTime);
+      }
+      setLastLiveDataAt(new Date().toISOString());
+      setIsDeviceOnline(true);
       setTank(nextTank);
-      handleLiveEvents(nextTank, nextStatus);
-      return nextTank;
+      handleLiveEvents(nextTank, nextStatus, true);
+      return { changed: true, tank: nextTank, status: nextStatus };
     },
     [handleLiveEvents],
   );
@@ -681,19 +799,24 @@ function App() {
 
     try {
       const row = await fetchTankRow();
+      setApiConnected(true);
+      setLastSuccessfulFetchAt(new Date().toISOString());
 
       if (!row) {
-        applyTankRow(null);
-        setConnected(true);
-        setLastError('No data available');
+        if (!lastSignatureRef.current) {
+          applyTankRow(null);
+          setLastError('No data available');
+        }
         return;
       }
 
-      applyTankRow(row);
-      setConnected(true);
+      const result = applyTankRow(row);
+      if (!result.changed) {
+        // Stale/repeated responses do not refresh device-online state or create alerts.
+      }
       setLastError('');
     } catch (error) {
-      setConnected(false);
+      setApiConnected(false);
       setLastError(error.message || 'Unable to fetch live tank data');
     } finally {
       setIsRefreshing(false);
@@ -702,6 +825,11 @@ function App() {
 
   const handlePumpChange = useCallback(
     async (nextPumpState) => {
+      if (!isDeviceOnline) {
+        setLastError('Device is offline. Showing last known data.');
+        return;
+      }
+
       setControlLoading(nextPumpState);
       setLastError('');
 
@@ -715,19 +843,22 @@ function App() {
             if (!current) return current;
             const nextTank = { ...current, pump: nextPumpState };
             const nextPercent = waterPercentFromDistance(nextTank.distance);
-            handleLiveEvents(nextTank, resolveTankStatus(nextTank, nextPercent));
+            lastSignatureRef.current = tankSignature(nextTank);
+            setLastLiveDataAt(new Date().toISOString());
+            handleLiveEvents(nextTank, resolveTankStatus(nextTank, nextPercent), true);
             return nextTank;
           });
         }
 
-        setConnected(true);
+        setApiConnected(true);
+        setLastSuccessfulFetchAt(new Date().toISOString());
       } catch (error) {
         setLastError(error.message || 'Unable to update pump state');
       } finally {
         setControlLoading(null);
       }
     },
-    [applyTankRow, handleLiveEvents],
+    [applyTankRow, handleLiveEvents, isDeviceOnline],
   );
 
   const markNotificationRead = useCallback((id) => {
@@ -744,10 +875,25 @@ function App() {
     return () => window.clearInterval(timer);
   }, [loadLiveTank]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!lastLiveDataAt) {
+        setIsDeviceOnline(false);
+        return;
+      }
+
+      const elapsed = Date.now() - new Date(lastLiveDataAt).getTime();
+      setIsDeviceOnline(elapsed <= OFFLINE_TIMEOUT_MS);
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [lastLiveDataAt]);
+
   return (
     <>
       <div className="animated-backdrop" />
       <Header
+        isDeviceOnline={isDeviceOnline}
         isPanelOpen={isPanelOpen}
         notifications={notifications}
         onTogglePanel={() => setIsPanelOpen((open) => !open)}
@@ -759,7 +905,10 @@ function App() {
         tank={tank}
         tankStatus={tankStatus}
         waterPercent={waterPercent}
-        connected={connected}
+        apiConnected={apiConnected}
+        isDeviceOnline={isDeviceOnline}
+        lastLiveDataAt={lastLiveDataAt}
+        lastSuccessfulFetchAt={lastSuccessfulFetchAt}
         isRefreshing={isRefreshing}
         controlLoading={controlLoading}
         onRefresh={loadLiveTank}

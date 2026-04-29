@@ -177,11 +177,20 @@ button {
 
 .live-chip {
   padding: 9px 12px;
-  border: 1px solid rgba(66, 245, 155, 0.32);
   border-radius: 999px;
+  font-size: 13px;
+}
+
+.live-chip.online {
+  border: 1px solid rgba(66, 245, 155, 0.32);
   color: #bfffe1;
   background: rgba(66, 245, 155, 0.08);
-  font-size: 13px;
+}
+
+.live-chip.offline {
+  border: 1px solid rgba(255, 77, 109, 0.38);
+  color: #ffd0d8;
+  background: rgba(255, 77, 109, 0.1);
 }
 
 .icon-button {
@@ -461,9 +470,36 @@ button {
   box-shadow: 0 0 16px rgba(66, 245, 155, 0.8);
 }
 
+.connection-pill.offline {
+  border-color: rgba(255, 77, 109, 0.34);
+  color: #ffd6dc;
+  background: rgba(255, 77, 109, 0.1);
+}
+
 .connection-pill.offline span {
-  background: var(--yellow);
-  box-shadow: 0 0 16px rgba(255, 209, 102, 0.8);
+  background: var(--red);
+  box-shadow: 0 0 16px rgba(255, 77, 109, 0.82);
+}
+
+.api-pill {
+  align-self: flex-start;
+  margin-top: 10px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.api-pill.online {
+  border: 1px solid rgba(65, 233, 255, 0.24);
+  color: #bdeff7;
+  background: rgba(65, 233, 255, 0.065);
+}
+
+.api-pill.offline {
+  border: 1px solid rgba(255, 209, 102, 0.25);
+  color: #ffe3a3;
+  background: rgba(255, 209, 102, 0.08);
 }
 
 .hero-copy h1 {
@@ -596,6 +632,17 @@ button {
 .tank-stage.overflow .tank-status-row strong {
   background: rgba(255, 77, 109, 0.13);
   color: var(--red);
+}
+
+.tank-stage.device-offline {
+  border-color: rgba(255, 77, 109, 0.28);
+  background:
+    linear-gradient(180deg, rgba(255, 77, 109, 0.08), rgba(255, 255, 255, 0.025)),
+    rgba(7, 15, 22, 0.76);
+}
+
+.tank-stage.device-offline::before {
+  opacity: 0.26;
 }
 
 .tank-wrap {
@@ -848,6 +895,18 @@ button {
   background: rgba(255, 77, 109, 0.12);
 }
 
+.alert-banner.offline {
+  border-color: rgba(255, 77, 109, 0.38);
+  background:
+    linear-gradient(90deg, rgba(255, 77, 109, 0.12), rgba(255, 209, 102, 0.06)),
+    rgba(255, 255, 255, 0.04);
+}
+
+.alert-banner.offline > span {
+  color: var(--red);
+  background: rgba(255, 77, 109, 0.14);
+}
+
 .alert-banner.muted {
   border-color: rgba(151, 232, 255, 0.16);
 }
@@ -885,6 +944,21 @@ button {
   display: block;
   margin-top: 6px;
   font-size: 20px;
+}
+
+.control-panel p {
+  max-width: 460px;
+  margin: 8px 0 0;
+  color: #ffbdc8;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.control-panel.offline {
+  border-color: rgba(255, 77, 109, 0.28);
+  background:
+    linear-gradient(100deg, rgba(255, 77, 109, 0.1), rgba(255, 255, 255, 0.035) 54%, rgba(255, 209, 102, 0.07)),
+    rgba(255, 255, 255, 0.04);
 }
 
 .control-actions {
